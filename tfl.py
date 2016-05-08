@@ -4,7 +4,7 @@ Created on Sun May  8 11:19:10 2016
 
 @author: andyjones
 """
-
+import networkx as nx
 import scipy as sp
 import time
 import json
@@ -54,47 +54,6 @@ def get_routes():
             
     return pd.DataFrame(results)
     
-def get_route_info(line_id, direction):
-    path = os.path.join('cache/routes', '{}-{}.json'.format(line_id, direction))  
-    if not os.path.exists(path):
-        print('Fetching {}-{}'.format(line_id, direction))
-        data = call_api('Line/{}/Route/Sequence/{}'.format(line_id, direction))
-        json.dump(data, open(path, 'w+'))
-        
-    return json.load(open(path))
-            
-def cache_route_info(routes):
-    route_dirs = routes[['route_id', 'direction']].drop_duplicates()
-    for i, (_, (route_id, direction)) in enumerate(route_dirs.iterrows()):
-        print i
-        get_route_info(route_id, direction)
-        
-def get_stop_sequences(routes):
-    results = {}
-    route_dirs = routes[['route_id', 'direction']].drop_duplicates()
-    for _, (route_id, direction) in route_dirs.iterrows():
-        route_info = get_route_info(route_id, direction)
-        for i, sequence in enumerate(route_info['orderedLineRoutes']):
-            results[(route_id, direction, i)] = sequence['naptanIds']
-        
-    return pd.Series(results)
-    
-def get_station_locations(routes):
-    results = []
-    route_dirs = routes[['route_id', 'direction']].drop_duplicates()
-    for _, (route_id, direction) in route_dirs.iterrows():
-        route_info = get_route_info(route_id, direction)
-        for station in route_info['stations']:
-            results.append({
-                'id': station['id'],
-                'name': station['name'],
-                'latitude': station.get('lat', sp.nan),
-                'longitude': station.get('lon', sp.nan)
-            })
-            
-    results = pd.DataFrame(results).drop_duplicates('id').set_index('id')
-    return results
-    
 def get_timetable(route_id, origin, destination):
     path = os.path.join('cache/timetables', '{}-{}-{}.json'.format(route_id, origin, destination))  
     if not os.path.exists(path):
@@ -104,8 +63,75 @@ def get_timetable(route_id, origin, destination):
         
     return json.load(open(path))
     
-def cache_timetables(routes):
-    route_dirs = routes[['route_id', 'origin', 'destination']].drop_duplicates()
-    for i, (_, (route_id, origin, destination)) in enumerate(route_dirs.iterrows()):
-        print i
-        get_route_info(route_id, origin, destination)
+def walk_timetables(routes):    
+    for _, row in routes.iterrows():
+        data = get_timetable(row['route_id'], row['origin_id'], row['destination_id'])
+        if ('timetable' in data) and (len(data['timetable']['routes']) > 0):
+            yield data
+        
+def get_stops(route_id):
+    path = os.path.join('cache/stoppoints', '{}.json'.format(route_id))  
+    if not os.path.exists(path):
+        print('Fetching {}'.format(route_id))
+        data = call_api('Line/{}/StopPoints'.format(route_id))
+        json.dump(data, open(path, 'w+'))
+        
+    return json.load(open(path))
+    
+def walk_stops(routes):
+    for _, row in routes.iterrows():
+        data = get_stops(row['route_id'])
+        yield data    
+        
+def get_locations(routes):
+    results = []
+    for stops in walk_stops(routes):
+        for stop in stops:
+            results.append({
+                'id': stop['id'],
+                'naptan': stop['naptanId'],
+                'station_naptan': stop.get('stationNaptan', ''),
+                'hub_naptan': stop.get('hubNaptanCode', ''),
+                'name': stop['commonName'],
+                'latitude': stop['lat'],
+                'longitude': stop['lon']
+            })
+            
+    return pd.DataFrame(results).drop_duplicates('naptan').set_index('naptan')
+    
+def get_edges(routes):
+    results = []
+    for timetable in walk_timetables(routes):
+        origin = timetable['timetable']['departureStopId']
+        for route in timetable['timetable']['routes']:
+            for intervals in route['stationIntervals']:
+                stops = [origin] + [x['stopId'] for x in intervals['intervals']]
+                edges = [[s, t] for s, t in zip(stops, stops[1:])]
+                
+                times = [0] + [x['timeToArrival'] for x in intervals['intervals']]
+                weights = list(sp.diff(sp.array(times)))
+                
+                results.extend([[s, t, w] for (s, t), w in zip(edges, weights)])
+    
+    results = pd.DataFrame(results, columns=['origin', 'destination', 'time'])
+    results = results.groupby(['origin', 'destination']).mean()
+    
+    return results
+
+def build_graph(edges, locations):
+    G = nx.Graph()
+    G.add_weighted_edges_from(map(tuple, list(edges.reset_index().values)))
+    
+    for naptan, location in locations.iterrows():
+        if location.hub_naptan != '':
+            G.add_weighted_edges_from([(naptan, location.hub_naptan, 5)])
+            
+    return G
+    
+#to_green_park = nx.single_source_dijkstra_path_length(G, origin, weight='weight')
+#points = locations.loc[to_green_park.keys(), ['latitude', 'longitude']].values
+#colors = sp.array(to_green_park.values()).clip(0, 60)
+#plt.scatter(points[:, 1], points[:, 0], c=colors, cmap=plt.cm.viridis_r, s=10, alpha=0.4, marker='.', edgecolor='face')
+#plt.xlim(-0.5, 0.3)
+#plt.ylim(51.3, 51.65)
+#plt.colorbar()

@@ -118,15 +118,20 @@ def get_edges(routes):
     
     return results
 
-def build_graph(edges, locations):
+def get_travel_times(edges, locations, origin='940GZZLUGPK', transit_time=5):
     G = nx.Graph()
     G.add_weighted_edges_from(map(tuple, list(edges.reset_index().values)))
     
     for naptan, location in locations.iterrows():
         if location.hub_naptan != '':
-            G.add_weighted_edges_from([(naptan, location.hub_naptan, 5)])
+            G.add_weighted_edges_from([(naptan, location.hub_naptan, transit_time)])
             
-    return G
+    times = nx.single_source_dijkstra_path_length(G, origin, weight='weight')
+    return pd.Series(times)
+    
+#routes = get_routes()
+#edges = get_edges()
+#locations = get_station_locations(routes)
     
 #to_green_park = nx.single_source_dijkstra_path_length(G, origin, weight='weight')
 #points = locations.loc[to_green_park.keys(), ['latitude', 'longitude']].values

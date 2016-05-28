@@ -20,6 +20,7 @@ PARAMS = {
     'app_key': '8f945b259bf29848031c8dbdb7abf4b3',
 }
 
+
 def load_train_stations():
     k = KML()
     k.from_string(open('data/stations.kml').read())
@@ -129,9 +130,13 @@ def get_travel_times(edges, locations, origin='940GZZLUGPK', transit_time=5):
     times = nx.single_source_dijkstra_path_length(G, origin, weight='weight')
     return pd.Series(times)
     
-#routes = get_routes()
-#edges = get_edges()
-#locations = get_station_locations(routes)
+def run():
+    if not os.path.exists('edges.pkl'):
+        routes = get_routes()
+        get_edges(routes).to_pickle('edges.pkl')
+        get_locations(routes).to_pickle('locations.pkl')
+        
+    return pd.read_pickle('edges.pkl'), pd.read_pickle('locations.pkl')
     
 #to_green_park = nx.single_source_dijkstra_path_length(G, origin, weight='weight')
 #points = locations.loc[to_green_park.keys(), ['latitude', 'longitude']].values

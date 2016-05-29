@@ -6,14 +6,16 @@ Created on Sat May  7 08:55:29 2016
 """
 
 import scipy as sp
+import scipy.ndimage
+import scipy.interpolate
 import pandas as pd
 from mpl_toolkits.basemap import Basemap
 import matplotlib.pyplot as plt
 
 import tfl
 
-LONDON_LONS = (-.5, +.5)
-LONDON_LATS = (51.25, 51.75)
+LONDON_LONS = (-.35, +.15)
+LONDON_LATS = (51.4, 51.65)
 
 PRICE_PAID_COLUMNS = {
         0: 'id',  
@@ -110,8 +112,12 @@ def get_array(coords, values):
     x_size = int((LONDON_LONS[1] - LONDON_LONS[0])/lon_res) + 1    
     y_size = int((LONDON_LATS[1] - LONDON_LATS[0])/lat_res) + 1
     
+    x_mask = (indices['x'] < 0) | (indices['x'] >= x_size)
+    y_mask = (indices['y'] < 0) | (indices['y'] >= y_size)
+    mask = ~(x_mask | y_mask)
+    
     arr = sp.nan*sp.zeros((x_size, y_size))
-    arr[indices['x'].values, indices['y'].values] = indices['values'].values
+    arr[indices.loc[mask, 'x'].values, indices.loc[mask, 'y'].values] = indices.loc[mask, 'values'].values
     
     return arr
     
@@ -128,42 +134,85 @@ def smooth(arr, sigma=5):
     
     return corrected
     
-def show(arr, lower=None, upper=None):
-    lower = lower if lower is not None else sp.nanpercentile(arr, 5)
-    upper = upper if upper is not None else sp.nanpercentile(arr, 95)
+def show(arr, **kwargs):
+    params = {
+        'vmin': sp.nanpercentile(arr, 1),
+        'vmax': sp.nanpercentile(arr, 99),
+        'cmap': plt.cm.viridis,
+        'interpolation': 'nearest'
+    }    
     
-    plt.imshow(arr.T[::-1], vmin=lower, vmax=upper, cmap=plt.cm.viridis, interpolation='nearest')
+    plt.imshow(arr.T[::-1], **dict(params, **kwargs))
     plt.colorbar(fraction=0.03)
     
-def with_walking(time_arr, mins_per_res=1.1, constant=5):
-    mask = sp.isnan(time_arr)
-    dists, indices = sp.ndimage.distance_transform_edt(mask, return_indices=True)
+def with_walking(time_arr, mins_per_square=1.3, constant=5):
+    arr = time_arr.copy()
+    cross_footprint = sp.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]]).astype(bool)
+    diag_footprint = sp.array([[1, 0, 1],[0, 1, 0], [1, 0, 1]]).astype(bool)
+    arr[sp.isnan(arr)] = sp.inf
+    for i in range(60):
+        cross_arr = sp.ndimage.minimum_filter(arr, footprint=cross_footprint)
+        cross_arr[sp.isnan(cross_arr)] = sp.inf
+        cross_changes = (cross_arr != arr)
+        cross_arr[cross_changes] += 1*mins_per_square
     
-    return time_arr[indices[0], indices[1]] + mins_per_res*dists + constant
+        diag_arr = sp.ndimage.minimum_filter(arr, footprint=diag_footprint)
+        diag_arr[sp.isnan(diag_arr)] = sp.inf
+        diag_changes = (diag_arr != arr)
+        diag_arr[diag_changes] += 1.4*mins_per_square
+    
+        arr = sp.minimum(cross_arr, diag_arr)
+    
+    arr[sp.isinf(arr)] = sp.nan
+    
+    return arr + constant
+    
+def get_relative_prices(walking_time, smoothed_prices):
+    x = walking_time.flatten()
+    y = smoothed_prices.flatten()
+    mask = sp.isnan(x) | sp.isnan(y)
+    
+    spline = sp.interpolate.UnivariateSpline(x[~mask], y[~mask], s=len(x))
+    v = spline(x)
+    
+    rel = (y - v).reshape(walking_time.shape)
+    
+    return rel
+    
+def fill_nans(arr, sigma=1):
+    filled = arr.copy()
+    nans = sp.isnan(arr)    
+    
+    filled[nans] = 0
+    smoothed = sp.ndimage.gaussian_filter(filled, sigma=sigma, truncate=20)  
+    missing_coefs = sp.ndimage.gaussian_filter((~nans).astype(float), sigma=sigma, truncate=20)
+    
+    corrected = smoothed/missing_coefs
+    
+    return corrected
 
-#f = sp.interpolate.NearestNDInterpolator(sp.vstack([x, y]).T, z)
-#
-#ny = prices.latitude.values
-#nx = prices.longitude.values
-#house_times = f(sp.vstack([nx, ny]).T)
-#
-#a = []
-#q25 = []
-#q50 = []
-#q75 = []
-#for t in sp.arange(10, 81):
-#    window = ((house_times > t - 7) & (house_times < t + 7))
-#    a.append(t)
-#    q25.append(sp.percentile(prices.price[window], 25))
-#    q50.append(sp.percentile(prices.price[window], 50))
-#    q75.append(sp.percentile(prices.price[window], 75))
-#
-#x_noise = sp.random.normal(scale=1, size=house_times.shape)
-#y_noise = sp.random.normal(scale=10000, size=prices.price.shape)
-#plt.scatter(house_times + x_noise, prices.price + y_noise, marker='.', alpha=0.05, s=20, edgecolor='face', c='k')
-#plt.ylim(0, 2e6)
-#plt.xlim(10, 80)
-#plt.fill_between(a, q25, q75, alpha=0.3)
-#plt.plot(a, q25, a, q75, c=sns.color_palette()[0])
-#plt.plot(a, q50, c=sns.color_palette()[0], linewidth=5)
-#plt.gcf().set_size_inches(10, 8)
+def overlay_with_map(relative_prices):
+    map_image = sp.ndimage.imread('map.png')
+    filled_prices = fill_nans(sp.exp(relative_prices), 3)
+    zoomed = sp.ndimage.zoom(filled_prices, map_image.shape[1]/float(filled_prices.shape[0]))
+    
+    plt.imshow(map_image.mean(2), interpolation='nearest', cmap=plt.cm.gray)
+    plt.imshow(zoomed.T[::-1], alpha=0.5, interpolation='nearest', cmap=plt.cm.viridis, vmax=1.25, vmin=0.75)
+    plt.gcf().set_size_inches(36, 36)
+    plt.colorbar(fraction=0.03)
+    plt.savefig('relative_prices.png', bbox_inches='tight')
+
+def run():
+    edges, locations = tfl.run()
+    
+    prices = get_price_paid_coords()
+    price_arr = get_array(prices[['latitude', 'longitude']], prices.price)
+    smoothed_prices = smooth(sp.log10(price_arr), 2)
+    
+    times = get_time_to_location(edges, locations)
+    time_arr = get_array(times[['latitude', 'longitude']], times.time)
+    walking_time = with_walking(time_arr)
+    
+    relative_prices = get_relative_prices(walking_time, smoothed_prices)
+    
+    overlay_with_map(relative_prices)

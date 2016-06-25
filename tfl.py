@@ -6,7 +6,6 @@ Created on Sun May  8 11:19:10 2016
 """
 import networkx as nx
 import scipy as sp
-import time
 import json
 import pandas as pd
 import requests
@@ -14,6 +13,8 @@ import os
 
 ROOT = 'https://api.tfl.gov.uk/'
 KEYS = json.load(open('data/tfl_keys.json'))
+
+CACHE_PATH = 'cache'
 
 DEFAULT_ORIGIN = '940GZZLUGPK'
 
@@ -41,7 +42,7 @@ def get_routes():
     return pd.DataFrame(results)
     
 def get_timetable(route_id, origin, destination):
-    path = os.path.join('cache/timetables', '{}-{}-{}.json'.format(route_id, origin, destination))  
+    path = os.path.join(CACHE_PATH, 'timetables', '{}-{}-{}.json'.format(route_id, origin, destination))  
     if not os.path.exists(path):
         print('Fetching {}-{}-{}'.format(route_id, origin, destination))
         data = call_api('Line/{}/Timetable/{}/to/{}'.format(route_id, origin, destination))
@@ -56,7 +57,7 @@ def walk_timetables(routes):
             yield data
         
 def get_stops(route_id):
-    path = os.path.join('cache/stoppoints', '{}.json'.format(route_id))  
+    path = os.path.join(CACHE_PATH, 'stoppoints', '{}.json'.format(route_id))  
     if not os.path.exists(path):
         print('Fetching {}'.format(route_id))
         data = call_api('Line/{}/StopPoints'.format(route_id))
@@ -115,18 +116,12 @@ def get_travel_times(edges, locations, origin=DEFAULT_ORIGIN, transit_time=5):
     times = nx.single_source_dijkstra_path_length(G, origin, weight='weight')
     return pd.Series(times)
     
-def run():
-    if not os.path.exists('edges.pkl'):
+def cache():
+    edge_cache = os.path.join(CACHE_PATH, 'edges.pkl')
+    location_cache = os.path.join(CACHE_PATH, 'locations.pkl')
+    if not os.path.exists(edge_cache):
         routes = get_routes()
-        get_edges(routes).to_pickle('edges.pkl')
-        get_locations(routes).to_pickle('locations.pkl')
+        get_edges(routes).to_pickle(edge_cache)
+        get_locations(routes).to_pickle(location_cache)
         
-    return pd.read_pickle('edges.pkl'), pd.read_pickle('locations.pkl')
-    
-#to_green_park = nx.single_source_dijkstra_path_length(G, origin, weight='weight')
-#points = locations.loc[to_green_park.keys(), ['latitude', 'longitude']].values
-#colors = sp.array(to_green_park.values()).clip(0, 60)
-#plt.scatter(points[:, 1], points[:, 0], c=colors, cmap=plt.cm.viridis_r, s=10, alpha=0.4, marker='.', edgecolor='face')
-#plt.xlim(-0.5, 0.3)
-#plt.ylim(51.3, 51.65)
-#plt.colorbar()
+    return pd.read_pickle(edge_cache), pd.read_pickle(location_cache)

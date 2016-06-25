@@ -4,6 +4,7 @@ Created on Sat May  7 08:55:29 2016
 
 @author: andyjones
 """
+import os
 
 import scipy as sp
 import scipy.ndimage
@@ -11,6 +12,11 @@ import scipy.interpolate
 import pandas as pd
 from mpl_toolkits.basemap import Basemap
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
+from matplotlib.ticker import FormatStrFormatter
+import seaborn as sns
+
+sns.set_style('ticks')
 
 import tfl
 
@@ -21,6 +27,8 @@ LONDON_LATS = (51.4, 51.65)
 
 PRICE_PAID_PATH = 'data/pp-2015.csv'
 POSTCODES_PATH = 'data/ukpostcodes.zip'
+
+OUTPUT_PATH = 'output'
 
 PRICE_PAID_COLUMNS = {
         0: 'id',  
@@ -64,21 +72,6 @@ def get_price_paid_coords():
     london = filter_to_london(merged).copy()
     london['price'] = sp.log10(london['price'])
     return london.drop('postcode', 1)
-    
-def get_basemap_params(coords):
-    padding = 0.01
-    options = {
-        'projection': 'tmerc',
-        'lat_0': 50.,
-        'lon_0': 0.,
-        'ellps': 'WGS84',
-        'urcrnrlat': coords.latitude.max() + padding,
-        'llcrnrlat': coords.latitude.min() - padding,
-        'urcrnrlon': coords.longitude.max() + padding,
-        'llcrnrlon': coords.longitude.min() - padding,
-        'resolution': 'c',
-    }
-    return options
 
 def get_time_to_location(edges, locations):
     times = tfl.get_travel_times(edges, locations)
@@ -113,7 +106,7 @@ def get_array(coords, values):
     
     indices = get_grid_indices(coords)
     indices['values'] = values
-    indices = indices.groupby(['x', 'y']).median().reset_index()
+    indices = indices.groupby(['x', 'y'])['values'].agg(['median', 'count']).reset_index()
     
     x_size = int((LONDON_LONS[1] - LONDON_LONS[0])/lon_res) + 1    
     y_size = int((LONDON_LATS[1] - LONDON_LATS[0])/lat_res) + 1
@@ -121,11 +114,15 @@ def get_array(coords, values):
     x_mask = (indices['x'] < 0) | (indices['x'] >= x_size)
     y_mask = (indices['y'] < 0) | (indices['y'] >= y_size)
     mask = ~(x_mask | y_mask)
+    indices = indices.loc[mask]
     
     arr = sp.nan*sp.zeros((x_size, y_size))
-    arr[indices.loc[mask, 'x'].values, indices.loc[mask, 'y'].values] = indices.loc[mask, 'values'].values
+    arr[indices['x'].values, indices['y'].values] = indices['median'].values
     
-    return arr
+    count_arr = sp.zeros((x_size, y_size)) 
+    count_arr[indices['x'].values, indices['y'].values] = indices['count'].values
+    
+    return arr, count_arr
     
 def smooth(arr, sigma=5):
     filled = arr.copy()
@@ -138,17 +135,6 @@ def smooth(arr, sigma=5):
     corrected = smoothed/missing_coefs
     
     return corrected
-    
-def show(arr, **kwargs):
-    params = {
-        'vmin': sp.nanpercentile(arr, 1),
-        'vmax': sp.nanpercentile(arr, 99),
-        'cmap': plt.cm.viridis,
-        'interpolation': 'nearest'
-    }    
-    
-    plt.imshow(arr.T[::-1], **dict(params, **kwargs))
-    plt.colorbar(fraction=0.03)
     
 def with_walking(time_arr, mins_per_square=1.3, transfer_constant=5):
     arr = time_arr.copy()
@@ -184,17 +170,46 @@ def get_relative_prices(walking_time, smoothed_prices):
     
     return rel
 
-def overlay_with_map(relative_prices):
+def plot_over_map(arr, **kwargs):
     map_image = sp.ndimage.imread('map.png')
-    filled_prices = smooth(sp.exp(relative_prices), 1)
+    filled_prices = smooth(arr, 1)
     zoomed = sp.ndimage.zoom(filled_prices, map_image.shape[1]/float(filled_prices.shape[0]))
     
     plt.imshow(map_image.mean(2), interpolation='nearest', cmap=plt.cm.gray)
-    plt.imshow(zoomed.T[::-1], alpha=0.5, interpolation='nearest', cmap=plt.cm.viridis, vmax=1.25, vmin=0.75)
-    plt.gcf().set_size_inches(36, 36)
-    plt.colorbar(fraction=0.03)
+    plt.imshow(zoomed.T[::-1], alpha=0.5, interpolation='nearest', cmap=plt.cm.viridis, **kwargs)
+    
+    plt.xticks([])
+    plt.yticks([])
 
-def with_contours(smoothed_prices, walking_time):
+def plot_price(smoothed_prices):
+    plot_over_map(10**(smoothed_prices - 3), norm=LogNorm(1.5e2, 1e3))
+    cb = plt.colorbar(fraction=0.03, ticks=sp.linspace(2e2, 1e3, 9), format=FormatStrFormatter(u'£%dk'))
+    cb.set_label(u'price paid (£1000s)')    
+    
+    plt.title('2015 Average Price Paid')
+    plt.gcf().set_size_inches(36, 36)
+    plt.gcf().savefig(os.path.join(OUTPUT_PATH, 'price_paid.png'), bbox_inches='tight')
+    
+def plot_time(walking_time):
+    plot_over_map(walking_time, vmin=15, vmax=75)
+    cb = plt.colorbar(fraction=0.03, ticks=sp.linspace(15, 75, 5))
+    cb.set_label('commute time (mins)')    
+    
+    plt.title('Commute time to Green Park')
+    plt.gcf().set_size_inches(36, 36)
+    plt.gcf().savefig(os.path.join(OUTPUT_PATH, 'travel_time.png'), bbox_inches='tight')
+    
+def plot_relative_price(relative_prices):
+    plot_over_map(10**relative_prices, norm=LogNorm(0.5, 2))
+    cb = plt.colorbar(fraction=0.03, ticks=sp.linspace(0.5, 2, 4), format=FormatStrFormatter('x%.2f'))
+    cb.set_label('fraction of average price paid for commute time')
+    
+    plt.title('Price relative to commute')
+    plt.gcf().set_size_inches(36, 36)
+    plt.gcf().savefig(os.path.join(OUTPUT_PATH, 'relative_price.png'), bbox_inches='tight')
+    
+
+def plot_price_with_time_contours(smoothed_prices, walking_time):
     map_image = sp.ndimage.imread('map.png')
     plt.imshow(map_image.mean(2), interpolation='nearest', cmap=plt.cm.gray)
     
@@ -209,19 +224,25 @@ def with_contours(smoothed_prices, walking_time):
     plt.contour(zoomed_times.T[::-1], cmap=plt.cm.Reds, levels=range(15, 61, 15), linewidths=3)
     
     plt.gcf().set_size_inches(36, 36)
-    plt.savefig('time_contours.png', bbox_inches='tight')
+    plt.savefig(os.path.join(OUTPUT_PATH, 'price_with_time_contours.png'), bbox_inches='tight')
+
 
 def run():
-    edges, locations = tfl.run()
+    edges, locations = tfl.cache()
     
     prices = get_price_paid_coords()
-    price_arr = get_array(prices[['latitude', 'longitude']], prices.price)
-    smoothed_prices = smooth(price_arr, 2)
+    price_arr, count_arr = get_array(prices[['latitude', 'longitude']], prices.price)
+    high_res_prices = smooth(price_arr, 2)
+    low_res_prices = smooth(price_arr, 10)    
+    weights = smooth(count_arr, 2).clip(0, 3)/3
+    smoothed_prices = low_res_prices*(1-weights) + high_res_prices*(weights)
     
     times = get_time_to_location(edges, locations)
-    time_arr = get_array(times[['latitude', 'longitude']], times.time)
+    time_arr, _ = get_array(times[['latitude', 'longitude']], times.time)
     walking_time = with_walking(time_arr)
     
     relative_prices = get_relative_prices(walking_time, smoothed_prices)
     
-    overlay_with_map(relative_prices)
+    plot_price(smoothed_prices)
+    plot_time(walking_time)
+    plot_relative_price(smoothed_prices, walking_time)

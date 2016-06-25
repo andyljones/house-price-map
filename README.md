@@ -4,8 +4,8 @@
 ![Price paid](/output/relative_price.png?raw=true)
 
 ### Notes
- - The commute map uses Green Park as it's destination because that's where I work.
  - It's not actually house prices, it's whatever's in the land registry. Which I reckon is mostly house prices, but there's probably a bunch of commercial stuff in there too. 
+ - The commute map uses Green Park as it's destination because that's where I commute to. To generate your own, change the default origin in [tfl.py](tfl.py).
 
 ### Sources
  - [UK postcodes](https://www.freemaptools.com/download/full-postcodes/ukpostcodes.zip)

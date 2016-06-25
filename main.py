@@ -244,5 +244,7 @@ def run():
     relative_prices = get_relative_prices(walking_time, smoothed_prices)
     
     plot_price(smoothed_prices)
+    plt.clf()
     plot_time(walking_time)
-    plot_relative_price(smoothed_prices, walking_time)
+    plt.clf()    
+    plot_relative_price(relative_prices)

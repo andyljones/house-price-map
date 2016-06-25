@@ -11,29 +11,14 @@ import json
 import pandas as pd
 import requests
 import os
-import bs4
-from fastkml.kml import KML
 
 ROOT = 'https://api.tfl.gov.uk/'
-PARAMS = {
-    'app_id': '64dd8f8c',
-    'app_key': '8f945b259bf29848031c8dbdb7abf4b3',
-}
+KEYS = json.load(open('data/tfl_keys.json'))
 
-
-def load_train_stations():
-    k = KML()
-    k.from_string(open('data/stations.kml').read())
-    features = list(k.features())[0].features()
-    features = [[f.name.strip(), f.geometry.x, f.geometry.y] for f in features]
-    features = pd.DataFrame(features, columns=['name', 'x', 'y'])
-    return features
-    
-def load_bus_stops():
-    return pd.read_csv('data/bus-stops.csv')
+DEFAULT_ORIGIN = '940GZZLUGPK'
 
 def call_api(endpoint, **kwargs):
-    result = requests.get(ROOT + endpoint, params=dict(PARAMS, **kwargs))
+    result = requests.get(ROOT + endpoint, params=dict(KEYS, **kwargs))
     return json.loads(result.content)
     
 def get_routes():
@@ -119,7 +104,7 @@ def get_edges(routes):
     
     return results
 
-def get_travel_times(edges, locations, origin='940GZZLUGPK', transit_time=5):
+def get_travel_times(edges, locations, origin=DEFAULT_ORIGIN, transit_time=5):
     G = nx.Graph()
     G.add_weighted_edges_from(map(tuple, list(edges.reset_index().values)))
     

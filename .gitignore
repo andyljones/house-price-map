@@ -1,2 +1,5 @@
+*.pkl
+*.png
+*.pyc
 data
 cache

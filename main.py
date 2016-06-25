@@ -17,6 +17,11 @@ import tfl
 LONDON_LONS = (-.35, +.15)
 LONDON_LATS = (51.4, 51.65)
 
+#TODO: Redo the price interpolation properly rather than binning it first.
+
+PRICE_PAID_PATH = 'data/pp-2015.csv'
+POSTCODES_PATH = 'data/ukpostcodes.zip'
+
 PRICE_PAID_COLUMNS = {
         0: 'id',  
         1: 'price',
@@ -37,12 +42,12 @@ PRICE_PAID_COLUMNS = {
     }
 
 def load_price_paid():
-    data = pd.read_csv('data/pp-2015.csv', header=None)
+    data = pd.read_csv(PRICE_PAID_PATH, header=None)
     data = data.rename(columns=PRICE_PAID_COLUMNS)
     return data
     
 def load_postcodes():
-    data = pd.read_csv('data/ukpostcodes.zip')
+    data = pd.read_csv(POSTCODES_PATH)
     return data.set_index('postcode')[['latitude', 'longitude']]
     
 def filter_to_london(coords):
@@ -56,7 +61,8 @@ def get_price_paid_coords():
     price_paid = load_price_paid()[['price', 'date', 'postcode']]
     merged = pd.merge(price_paid, postcodes, left_on='postcode', right_index=True)
     
-    london = filter_to_london(merged)
+    london = filter_to_london(merged).copy()
+    london['price'] = sp.log10(london['price'])
     return london.drop('postcode', 1)
     
 def get_basemap_params(coords):
@@ -126,11 +132,10 @@ def smooth(arr, sigma=5):
     nans = sp.isnan(arr)    
     
     filled[nans] = 0
-    smoothed = sp.ndimage.gaussian_filter(filled, sigma=sigma)  
-    missing_coefs = sp.ndimage.gaussian_filter((~nans).astype(float), sigma=sigma)
+    smoothed = sp.ndimage.gaussian_filter(filled, sigma=sigma, truncate=10)  
+    missing_coefs = sp.ndimage.gaussian_filter((~nans).astype(float), sigma=sigma, truncate=10)
     
     corrected = smoothed/missing_coefs
-    corrected[nans] = sp.nan    
     
     return corrected
     
@@ -145,7 +150,7 @@ def show(arr, **kwargs):
     plt.imshow(arr.T[::-1], **dict(params, **kwargs))
     plt.colorbar(fraction=0.03)
     
-def with_walking(time_arr, mins_per_square=1.3, constant=5):
+def with_walking(time_arr, mins_per_square=1.3, transfer_constant=5):
     arr = time_arr.copy()
     cross_footprint = sp.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]]).astype(bool)
     diag_footprint = sp.array([[1, 0, 1],[0, 1, 0], [1, 0, 1]]).astype(bool)
@@ -165,7 +170,7 @@ def with_walking(time_arr, mins_per_square=1.3, constant=5):
     
     arr[sp.isinf(arr)] = sp.nan
     
-    return arr + constant
+    return arr + transfer_constant
     
 def get_relative_prices(walking_time, smoothed_prices):
     x = walking_time.flatten()
@@ -178,36 +183,40 @@ def get_relative_prices(walking_time, smoothed_prices):
     rel = (y - v).reshape(walking_time.shape)
     
     return rel
-    
-def fill_nans(arr, sigma=1):
-    filled = arr.copy()
-    nans = sp.isnan(arr)    
-    
-    filled[nans] = 0
-    smoothed = sp.ndimage.gaussian_filter(filled, sigma=sigma, truncate=20)  
-    missing_coefs = sp.ndimage.gaussian_filter((~nans).astype(float), sigma=sigma, truncate=20)
-    
-    corrected = smoothed/missing_coefs
-    
-    return corrected
 
 def overlay_with_map(relative_prices):
     map_image = sp.ndimage.imread('map.png')
-    filled_prices = fill_nans(sp.exp(relative_prices), 3)
+    filled_prices = smooth(sp.exp(relative_prices), 1)
     zoomed = sp.ndimage.zoom(filled_prices, map_image.shape[1]/float(filled_prices.shape[0]))
     
     plt.imshow(map_image.mean(2), interpolation='nearest', cmap=plt.cm.gray)
     plt.imshow(zoomed.T[::-1], alpha=0.5, interpolation='nearest', cmap=plt.cm.viridis, vmax=1.25, vmin=0.75)
     plt.gcf().set_size_inches(36, 36)
     plt.colorbar(fraction=0.03)
-    plt.savefig('relative_prices.png', bbox_inches='tight')
+
+def with_contours(smoothed_prices, walking_time):
+    map_image = sp.ndimage.imread('map.png')
+    plt.imshow(map_image.mean(2), interpolation='nearest', cmap=plt.cm.gray)
+    
+    zoomed_prices = sp.ndimage.zoom(smoothed_prices, map_image.shape[1]/float(smoothed_prices.shape[0]))
+    
+    plt.imshow(zoomed_prices.T[::-1], alpha=0.5, interpolation='nearest', cmap=plt.cm.viridis, vmin=5.25, vmax=5.75)
+    
+    plt.colorbar(fraction=0.03)
+    
+    smoothed_times = smooth(walking_time, sigma=2)
+    zoomed_times = sp.ndimage.zoom(smoothed_times, map_image.shape[1]/float(smoothed_prices.shape[0]))
+    plt.contour(zoomed_times.T[::-1], cmap=plt.cm.Reds, levels=range(15, 61, 15), linewidths=3)
+    
+    plt.gcf().set_size_inches(36, 36)
+    plt.savefig('time_contours.png', bbox_inches='tight')
 
 def run():
     edges, locations = tfl.run()
     
     prices = get_price_paid_coords()
     price_arr = get_array(prices[['latitude', 'longitude']], prices.price)
-    smoothed_prices = smooth(sp.log10(price_arr), 2)
+    smoothed_prices = smooth(price_arr, 2)
     
     times = get_time_to_location(edges, locations)
     time_arr = get_array(times[['latitude', 'longitude']], times.time)
